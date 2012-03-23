@@ -1,0 +1,26 @@
+<html>
+<head>
+<title>Tests</title>
+<script type="text/javascript" src="parser/jsmf.js"></script>
+<script type="text/javascript">
+function trace() {
+    try {
+        console.log.apply(console, arguments);
+    } catch (e) {}
+    
+    try {
+        document.body.innerHTML += Array.prototype.join.call(arguments, ' ') + "<br>\n";
+    } catch (e) {}
+}
+function test(name, testcase) {
+    trace(name, testcase() ? 'OK' : 'NG');
+    
+}
+
+onload = function () {
+    JSMF.test(test);
+};
+</script>
+</head>
+<body></body>
+</html>
