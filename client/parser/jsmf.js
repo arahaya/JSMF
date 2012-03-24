@@ -25,12 +25,12 @@ var JSMF = (function (window) {
         TYPE_OBJECT     = 0x10,
 
         // lookup table for charcode -> char
-        code2char = [],
+        _code2char = [],
 
         // convert byte array to byte string
-        bytes2str = is_chrome ?
+        _bytes2str = is_chrome ?
             function (bytes) {
-                var chr = code2char,
+                var chr = _code2char,
                     str = '',
                     i = 0,
                     l = bytes.length;
@@ -46,7 +46,7 @@ var JSMF = (function (window) {
             },
 
         // convert byte string to byte array
-        str2bytes = function(str) {
+        _str2bytes = function(str) {
             var bytes = [],
                 i = 0,
                 l = str.length;
@@ -56,6 +56,43 @@ var JSMF = (function (window) {
             }
             
             return bytes;
+        },
+
+        _countUTFBytes = function (str) {
+            var length = str.length,
+                i = 0,
+                bytes = 0,
+                code;
+            
+            // handle up to 3 bytes
+            while (i < length) {
+                code = str.charCodeAt(i++);
+                
+                if (code < 0x80) {
+                    bytes += 1;
+                }
+                else if (code < 0x800) {
+                    bytes += 2;
+                }
+                else {
+                    bytes += 3;
+                }
+            }
+            
+            return bytes;
+        },
+        
+        /**
+         * handle 4 byte utf8 characters
+         */
+        _chr = function (d) {
+            if (d < 0x10000) {
+                return String.fromCharCode(d);
+            }
+            
+            // convert to utf-16 format
+            d -= 0x10000;
+            return String.fromCharCode((d >> 10) + 0xD800) + String.fromCharCode((d & 0x3ff) + 0xDC00);
         },
 
         _typeof = function (obj) {
@@ -104,7 +141,7 @@ var JSMF = (function (window) {
     // init charcode table
     (function () {
         for (var i = 0; i < 256; i++) {
-            code2char[i] = String.fromCharCode(i);
+            _code2char[i] = String.fromCharCode(i);
         }
     })();
     
@@ -112,6 +149,9 @@ var JSMF = (function (window) {
         this._stream = [];
     };
     BinaryWriter.prototype = {
+        length: function () {
+            return this._stream.length;
+        },
         writeByte: function (value) {
             this._stream.push(value & 0xff);
         },
@@ -196,80 +236,36 @@ var JSMF = (function (window) {
             stream.push(m / 0x100 & 0xff);
             stream.push(m & 0xff);
         },
-        writeUTF: function (value) {
+        writeUTFBytes: function (value) {
             var stream = this._stream,
                 l = value.length,
                 i = 0,
-                b = 0,
-                c, j;
+                c;
             
-            // count bytes
             while (i < l) {
                 c = value.charCodeAt(i++);
                 
-                if (c <= 0x7f) {
-                    b++;
-                }
-                else if (c <= 0x7ff) {
-                    b += 2;
-                }
-                else if (c <= 0xffff) {
-                    b += 3;
-                }
-                else {
-                    j = 4;
-                    
-                    while (c >> (6 * j)) {
-                        j++;
-                    }
-                    
-                    b += j;
-                }
-            }
-            
-            // write length
-            this.writeInteger(b);
-            
-            // convert to unicode bytes
-            // http://user1.matsumoto.ne.jp/~goma/js/utf.js
-            i = 0;
-            while (i < l) {
-                c = value.charCodeAt(i++);
-                
-                if (c <= 0x7f) {
+                if (c < 0x80) {
                     stream.push(c);
                 }
-                else if (c <= 0x7ff) {
-                    stream.push(0xc0 | (c >>> 6));
-                    stream.push(0x80 | (c & 0x3f));
-                }
-                else if (c <= 0xffff) {
-                    stream.push(0xe0 | (c >>> 12));
-                    stream.push(0x80 | ((c >>> 6) & 0x3f));
+                else if (c < 0x800) {
+                    stream.push(0xc0 | (c >> 6));
                     stream.push(0x80 | (c & 0x3f));
                 }
                 else {
-                    j = 4;
-                    
-                    while (c >> (6 * j)) {
-                        j++;
-                    }
-                    
-                    stream.push(((0xff00 >>> j) & 0xff) | (c >>> (6 * --j)));
-                    
-                    while (j--) {
-                        stream.push(0x80 | ((c >>> (6 * j)) & 0x3f));
-                    }
+                    stream.push(0xe0 | (c >> 12));
+                    stream.push(0x80 | ((c >> 6) & 0x3f));
+                    stream.push(0x80 | (c & 0x3f));
                 }
             }
         },
         toString: function () {
-            return bytes2str(this._stream);
+            return _bytes2str(this._stream);
         }
     };
     
     function BinaryReader(bstring) {
-        this._stream = str2bytes(bstring);
+        this._stream = _str2bytes(bstring);
         this._position = 0;
     };
     BinaryReader.prototype = {
@@ -356,49 +352,35 @@ var JSMF = (function (window) {
             value = m * Math.pow(2, e);
             return s ? -value : value;
         },
-        readUTF: function () {
-            var length = this.readInteger(),
-                value = '',
-                chr = String.fromCharCode,
+        readUTFBytes: function (length) {
+            var value = '',
+                chr = _chr,
                 b, s, h;
             
             while (length-- > 0) {
                 b = this._read();
                 
-                if (b <= 0x7f) {
+                if (b < 0x80) {
                     value += chr(b);
                 }
-                else  {
-                    if ((b >> 5) == 0x6) {
-                        value += chr(((b & 0x1f) << 6) | (this._read() & 0x3f));
-                        length -= 1;
-                    }
-                    else if ((b >> 4) == 0xe) {
-                        value += chr(((b & 0xf) << 12) | ((this._read() & 0x3f) << 6) | (this._read() & 0x3f));
-                        length -= 2;
-                    }
-                    else {
-                        s = 1;
-                        
-                        while (b & (0x20 >>> s)) {
-                            s++;
-                        }
-                        
-                        var h = b & (0x1f >>> s);
-                        value += chr(h);
-                        
-                        while (s-- >= 0) {
-                            value += chr((u << 6) ^ (this._read() & 0x3f));
-                            length--;
-                        }
-                    }
+                else if ((b >> 5) === 0x06) {
+                    value += chr(((b & 0x1f) << 6) | (this._read() & 0x3f));
+                    length -= 1;
+                }
+                else if ((b >> 4) === 0x0e) {
+                    value += chr(((b & 0x0f) << 12) | ((this._read() & 0x3f) << 6) | (this._read() & 0x3f));
+                    length -= 2;
+                }
+                else {
+                    value += chr(((b & 0x07) << 18) | ((this._read() & 0x3f) << 12) | ((this._read() & 0x3f) << 6) | (this._read() & 0x3f));
+                    length -= 3;
                 }
             }
             
             return value;
         },
         toString: function () {
-            return bytes2str(this._stream);
+            return _bytes2str(this._stream);
         }
     };
     
@@ -408,62 +390,77 @@ var JSMF = (function (window) {
         this._strings = {};
         this._string_id = 0;
     };
-    Serializer.prototype.serialize = function(value) {
-        var type = _typeof(value),
-            stream = this._stream,
-            index, length;
-        
-        // write type marker
-        stream.writeByte(type);
-        
-        switch (type) {
-            case TYPE_UNDEFINED:
-                break;
-            case TYPE_NULL:
-                break;
-            case TYPE_FALSE:
-                break;
-            case TYPE_TRUE:
-                break;
-            case TYPE_STRING:
-                stream.writeUTF(value);
-                break;
-            case TYPE_INTEGER:
-                // serialize signed 29-bit integer
-                stream.writeInteger(value);
-                break;
-            case TYPE_NUMBER:
-                stream.writeDouble(value);
-                break;
-            case TYPE_DATE:
-                stream.writeDouble(value.getTime());
-                break;
-            case TYPE_ARRAY:
-                length = value.length;
-                stream.writeInteger(length);
-                
-                for (index = 0; index < length; index++) {
-                    this.serialize(value[index]);
-                }
-                break;
-            case TYPE_OBJECT:
-                length = 0;
-                
-                for (index in value) {
-                    if (value.hasOwnProperty(index)) {
-                        length++;
-                    }
-                }
-                
-                stream.writeInteger(length);
-                
-                for (index in value) {
-                    if (value.hasOwnProperty(index)) {
-                        stream.writeUTF(index);
+    Serializer.prototype = {
+        _writeString: function (value) {
+            var stream = this._stream,
+                length = _countUTFBytes(value);
+            
+            stream.writeInteger(length);
+            stream.writeUTFBytes(value);
+        },
+        _writeArray: function (value) {
+            
+        },
+        _writeObject: function (value) {
+            
+        },
+        serialize: function(value) {
+            var type = _typeof(value),
+                stream = this._stream,
+                index, length;
+            
+            // write type marker
+            stream.writeByte(type);
+            
+            switch (type) {
+                case TYPE_UNDEFINED:
+                    break;
+                case TYPE_NULL:
+                    break;
+                case TYPE_FALSE:
+                    break;
+                case TYPE_TRUE:
+                    break;
+                case TYPE_STRING:
+                    this._writeString(value);
+                    break;
+                case TYPE_INTEGER:
+                    // serialize signed 29-bit integer
+                    stream.writeInteger(value);
+                    break;
+                case TYPE_NUMBER:
+                    stream.writeDouble(value);
+                    break;
+                case TYPE_DATE:
+                    stream.writeDouble(value.getTime());
+                    break;
+                case TYPE_ARRAY:
+                    length = value.length;
+                    stream.writeInteger(length);
+                    
+                    for (index = 0; index < length; index++) {
                         this.serialize(value[index]);
                     }
-                }
-                break;
+                    break;
+                case TYPE_OBJECT:
+                    length = 0;
+                    
+                    for (index in value) {
+                        if (value.hasOwnProperty(index)) {
+                            length++;
+                        }
+                    }
+                    
+                    stream.writeInteger(length);
+                    
+                    for (index in value) {
+                        if (value.hasOwnProperty(index)) {
+                            this._writeString(index);
+                            this.serialize(value[index]);
+                        }
+                    }
+                    break;
+            }
         }
     }
     
@@ -473,47 +470,55 @@ var JSMF = (function (window) {
         this._strings = {};
         this._string_id = 0;
     };
-    Deserializer.prototype.deserialize = function () {
-        var stream = this._stream,
-            index, length, temp;
-        
-        switch (stream.readByte()) {
-            case TYPE_UNDEFINED:
-                return undefined;
-            case TYPE_NULL:
-                return null;
-            case TYPE_FALSE:
-                return false;
-            case TYPE_TRUE:
-                return true;
-            case TYPE_INTEGER:
-                return stream.readInteger();
-            case TYPE_NUMBER:
-                return stream.readDouble();
-            case TYPE_STRING:
-                return stream.readUTF();
-            case TYPE_DATE:
-                return new Date(stream.readDouble());
-            case TYPE_ARRAY:
+    Deserializer.prototype = {
+        _readString: function () {
+            var stream = this._stream,
                 length = stream.readInteger();
-                temp = [];
-                
-                for (index = 0; index < length; index++) {
-                    temp.push(this.deserialize());
-                }
-                
-                return temp;
-            case TYPE_OBJECT:
-                length = stream.readInteger();
-                temp = {};
-                
-                for (index = 0; index < length; index++) {
-                    temp[stream.readUTF()] = this.deserialize();
-                }
-                
-                return temp;
-            default:
-                throw new Error('Invalid format');
+            
+            return stream.readUTFBytes(length);
+        },
+        deserialize: function () {
+            var stream = this._stream,
+                index, length, temp;
+            
+            switch (stream.readByte()) {
+                case TYPE_UNDEFINED:
+                    return undefined;
+                case TYPE_NULL:
+                    return null;
+                case TYPE_FALSE:
+                    return false;
+                case TYPE_TRUE:
+                    return true;
+                case TYPE_INTEGER:
+                    return stream.readInteger();
+                case TYPE_NUMBER:
+                    return stream.readDouble();
+                case TYPE_STRING:
+                    return this._readString();
+                case TYPE_DATE:
+                    return new Date(stream.readDouble());
+                case TYPE_ARRAY:
+                    length = stream.readInteger();
+                    temp = [];
+                    
+                    for (index = 0; index < length; index++) {
+                        temp.push(this.deserialize());
+                    }
+                    
+                    return temp;
+                case TYPE_OBJECT:
+                    length = stream.readInteger();
+                    temp = {};
+                    
+                    for (index = 0; index < length; index++) {
+                        temp[this._readString()] = this.deserialize();
+                    }
+                    
+                    return temp;
+                default:
+                    throw new Error('Invalid format');
+            }
         }
     };
     
@@ -574,7 +579,7 @@ var JSMF = (function (window) {
             return _typeof(12345) === TYPE_INTEGER;
         });
         test('_typeof number', function () {
-            return _typeof(undefined) === TYPE_NUMBER;
+            return _typeof(12345.6789) === TYPE_NUMBER;
         });
         test('_typeof date', function () {
             return _typeof(new Date()) === TYPE_DATE;
@@ -635,19 +640,26 @@ var JSMF = (function (window) {
             var br = new BinaryReader(bw.toString());
             return br.readDouble() === value;
         });
-        test('writeUTF latin', function () {
+        test('writeUTFBytes latin', function () {
             var value = 'hello world';
             var bw = new BinaryWriter();
-            bw.writeUTF(value);
+            bw.writeUTFBytes(value);
             var br = new BinaryReader(bw.toString());
-            return br.readUTF() === value;
+            return br.readUTFBytes(bw.length()) === value;
         });
-        test('writeUTF japanese', function () {
-            var value = '‚±‚ñ‚É‚¿‚Í¢ŠE';
+        test('writeUTFBytes japanese', function () {
+            var value = 'ã“ã‚“ã«ã¡ã¯ä¸–ç•Œ';
             var bw = new BinaryWriter();
-            bw.writeUTF(value);
+            bw.writeUTFBytes(value);
             var br = new BinaryReader(bw.toString());
-            return br.readUTF() === value;
+            return br.readUTFBytes(bw.length()) === value;
+        });
+        test('writeUTFBytes 4byte', function () {
+            var value = 'ð €‹ð ®Ÿå¡¡å‰é °';
+            var bw = new BinaryWriter();
+            bw.writeUTFBytes(value);
+            var br = new BinaryReader(bw.toString());
+            return br.readUTFBytes(bw.length()) === value;
         });
         
         // test serialize/deserialize
