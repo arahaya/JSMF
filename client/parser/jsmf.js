@@ -59,27 +59,31 @@ var JSMF = (function (window) {
         },
 
         _countUTFBytes = function (str) {
-            var length = str.length,
+            var l = str.length,
                 i = 0,
-                bytes = 0,
-                code;
+                n = 0,
+                c;
             
-            // handle up to 3 bytes
-            while (i < length) {
-                code = str.charCodeAt(i++);
+            while (i < l) {
+                c = str.charCodeAt(i++);
                 
-                if (code < 0x80) {
-                    bytes += 1;
+                if (c < 0x80) {
+                    n += 1;
                 }
-                else if (code < 0x800) {
-                    bytes += 2;
+                else if (c < 0x800) {
+                    n += 2;
                 }
-                else {
-                    bytes += 3;
+                else if (c < 0xd800 || 0xdbff < c) {
+                    n += 3;
+                }
+                else if (i < l) {
+                    // UTF-16 Surrogates Pair
+                    i++;// skip one char
+                    n += 4;
                 }
             }
             
-            return bytes;
+            return n;
         },
         
         /**
@@ -245,11 +249,6 @@ var JSMF = (function (window) {
             while (i < l) {
                 c = value.charCodeAt(i++);
                 
-                if (c >= 0xD800 && 0xDBFF >= c && i < l) {
-                    // UTF-16 Surrogates Pair
-                    c = ((c - 0xD800) << 10) + (value.charCodeAt(i++) - 0xDC00) + 0x10000;
-                }
-                
                 if (c < 0x80) {
                     stream.push(c);
                 }
@@ -257,12 +256,14 @@ var JSMF = (function (window) {
                     stream.push(0xc0 | (c >> 6));
                     stream.push(0x80 | (c & 0x3f));
                 }
-                else if (c < 0x10000) {
+                else if (c < 0xd800 || 0xdbff < c) {
                     stream.push(0xe0 | (c >> 12));
                     stream.push(0x80 | ((c >> 6) & 0x3f));
                     stream.push(0x80 | (c & 0x3f));
                 }
-                else {
+                else if (i < l) {
+                    // UTF-16 Surrogates Pair
+                    c = ((c - 0xd800) << 10) + (value.charCodeAt(i++) - 0xdc00) + 0x10000;
                     stream.push(0xf0 | (c >> 18));
                     stream.push(0x80 | ((c >> 12) & 0x3f));
                     stream.push(0x80 | ((c >> 6) & 0x3f));
@@ -366,26 +367,28 @@ var JSMF = (function (window) {
         readUTFBytes: function (length) {
             var value = '',
                 chr = _chr,
-                b, s, h;
+                b, c;
             
             while (length-- > 0) {
                 b = this._read();
                 
                 if (b < 0x80) {
-                    value += chr(b);
+                    c = b;
                 }
                 else if ((b >> 5) === 0x06) {
-                    value += chr(((b & 0x1f) << 6) | (this._read() & 0x3f));
+                    c = ((b & 0x1f) << 6) | (this._read() & 0x3f);
                     length -= 1;
                 }
                 else if ((b >> 4) === 0x0e) {
-                    value += chr(((b & 0x0f) << 12) | ((this._read() & 0x3f) << 6) | (this._read() & 0x3f));
+                    c = ((b & 0x0f) << 12) | ((this._read() & 0x3f) << 6) | (this._read() & 0x3f);
                     length -= 2;
                 }
                 else {
-                    value += chr(((b & 0x07) << 18) | ((this._read() & 0x3f) << 12) | ((this._read() & 0x3f) << 6) | (this._read() & 0x3f));
+                    c = ((b & 0x07) << 18) | ((this._read() & 0x3f) << 12) | ((this._read() & 0x3f) << 6) | (this._read() & 0x3f);
                     length -= 3;
                 }
+                
+                value += chr(c);
             }
             
             return value;
