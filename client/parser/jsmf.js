@@ -245,6 +245,11 @@ var JSMF = (function (window) {
             while (i < l) {
                 c = value.charCodeAt(i++);
                 
+                if (c >= 0xD800 && 0xDBFF >= c && i < l) {
+                    // UTF-16 Surrogates Pair
+                    c = ((c - 0xD800) << 10) + (value.charCodeAt(i++) - 0xDC00) + 0x10000;
+                }
+                
                 if (c < 0x80) {
                     stream.push(c);
                 }
@@ -252,8 +257,14 @@ var JSMF = (function (window) {
                     stream.push(0xc0 | (c >> 6));
                     stream.push(0x80 | (c & 0x3f));
                 }
-                else {
+                else if (c < 0x10000) {
                     stream.push(0xe0 | (c >> 12));
+                    stream.push(0x80 | ((c >> 6) & 0x3f));
+                    stream.push(0x80 | (c & 0x3f));
+                }
+                else {
+                    stream.push(0xf0 | (c >> 18));
+                    stream.push(0x80 | ((c >> 12) & 0x3f));
                     stream.push(0x80 | ((c >> 6) & 0x3f));
                     stream.push(0x80 | (c & 0x3f));
                 }
