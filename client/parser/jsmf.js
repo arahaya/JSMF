@@ -188,7 +188,7 @@ var JSMF = (function (window) {
             var stream = this._stream,
                 s, m, e, c, b;
             
-            if (value < 0) {
+            if (value < 0 || (value === 0 && (1 / value) < 0)) {
                 s = 128;
                 value = -value;
             }
@@ -400,28 +400,116 @@ var JSMF = (function (window) {
     
     function Serializer(stream) {
         this._stream = stream;
-        this._objects = [];
-        this._strings = {};
-        this._string_id = 0;
+        this._reference = [];
     };
     Serializer.prototype = {
         _writeString: function (value) {
             var stream = this._stream,
-                length = _countUTFBytes(value);
+                reference = this._reference,
+                ref, length;
             
-            stream.writeInteger(length);
+            // check empty
+            if (!value) {
+                stream.writeInteger(0x01);
+                return;
+            }
+            
+            // check reference
+            ref = reference.indexOf(value);
+            if (ref !== -1) {
+                // write reference
+                stream.writeInteger(ref << 1);
+                return;
+            }
+            
+            // count length
+            length = _countUTFBytes(value);
+            
+            // add to reference table
+            reference.push(value);
+            
+            // write header
+            stream.writeInteger(length << 1 | 0x01);
+            
+            // write body
             stream.writeUTFBytes(value);
         },
         _writeArray: function (value) {
+            var stream = this._stream,
+                reference = this._reference,
+                length = value.length,
+                ref,
+                index;
             
+            // check empty
+            if (!length) {
+                stream.writeInteger(0x01);
+                return;
+            }
+            
+            // check reference
+            ref = reference.indexOf(value);
+            if (ref !== -1) {
+                // write reference
+                stream.writeInteger(ref << 1);
+                return;
+            }
+            
+            // add to reference table
+            reference.push(value);
+            
+            // write header
+            stream.writeInteger(length << 1 | 0x01);
+            
+            // write body
+            for (index = 0; index < length; index++) {
+                this.serialize(value[index]);
+            }
         },
         _writeObject: function (value) {
+            var stream = this._stream,
+                reference = this._reference,
+                ref, length, index;
             
+            // count length
+            length = 0;
+            for (index in value) {
+                if (value.hasOwnProperty(index)) {
+                    length++;
+                }
+            }
+            
+            // check empty
+            if (!length) {
+                stream.writeInteger(0x01);
+                return;
+            }
+            
+            // check reference
+            ref = reference.indexOf(value);
+            if (ref !== -1) {
+                // write reference
+                stream.writeInteger(ref << 1);
+                return;
+            }
+            
+            // add to reference table
+            reference.push(value);
+            
+            // write header
+            stream.writeInteger(length << 1 | 0x01);
+            
+            // write body
+            for (index in value) {
+                if (value.hasOwnProperty(index)) {
+                    this._writeString(index);
+                    this.serialize(value[index]);
+                }
+            }
         },
         serialize: function(value) {
             var type = _typeof(value),
-                stream = this._stream,
-                index, length;
+                stream = this._stream;
             
             // write type marker
             stream.writeByte(type);
@@ -449,30 +537,10 @@ var JSMF = (function (window) {
                     stream.writeDouble(value.getTime());
                     break;
                 case TYPE_ARRAY:
-                    length = value.length;
-                    stream.writeInteger(length);
-                    
-                    for (index = 0; index < length; index++) {
-                        this.serialize(value[index]);
-                    }
+                    this._writeArray(value);
                     break;
                 case TYPE_OBJECT:
-                    length = 0;
-                    
-                    for (index in value) {
-                        if (value.hasOwnProperty(index)) {
-                            length++;
-                        }
-                    }
-                    
-                    stream.writeInteger(length);
-                    
-                    for (index in value) {
-                        if (value.hasOwnProperty(index)) {
-                            this._writeString(index);
-                            this.serialize(value[index]);
-                        }
-                    }
+                    this._writeObject(value);
                     break;
             }
         }
@@ -480,16 +548,102 @@ var JSMF = (function (window) {
     
     function Deserializer(stream) {
         this._stream = stream;
-        this._objects = [];
-        this._strings = {};
-        this._string_id = 0;
+        this._reference = [];
     };
     Deserializer.prototype = {
         _readString: function () {
             var stream = this._stream,
-                length = stream.readInteger();
+                reference = this._reference,
+                ref = stream.readInteger(),
+                length, value;
             
-            return stream.readUTFBytes(length);
+            if (!(ref & 0x01)) {
+                // reference
+                ref >>= 1;
+                
+                if (ref >= reference.length) {
+                    throw new Error();
+                }
+                
+                return reference[ref];
+            }
+            
+            length = ref >> 1;
+            
+            if (length) {
+                value = stream.readUTFBytes(length);
+                
+                // add to reference table
+                reference.push(value);
+            }
+            else {
+                // zero length
+                value = '';
+            }
+            
+            return value;
+        },
+        _readArray: function () {
+            var stream = this._stream,
+                reference = this._reference,
+                ref = stream.readInteger(),
+                length, index, value;
+            
+            if (!(ref & 0x01)) {
+                // reference
+                ref >>= 1;
+                
+                if (ref >= reference.length) {
+                    throw new Error();
+                }
+                
+                return reference[ref];
+            }
+            
+            length = ref >> 1;
+            value = [];
+            
+            if (length) {
+                // add to reference table
+                reference.push(value);
+                
+                for (index = 0; index < length; index++) {
+                    value.push(this.deserialize());
+                }
+            }
+            
+            return value;
+        },
+        _readObject: function () {
+            var stream = this._stream,
+                reference = this._reference,
+                ref = stream.readInteger(),
+                length, index, value;
+            
+            if (!(ref & 0x01)) {
+                // reference
+                ref >>= 1;
+                
+                if (ref >= reference.length) {
+                    throw new Error();
+                }
+                
+                return reference[ref];
+            }
+            
+            length = ref >> 1;
+            value = {};
+            
+            if (length) {
+                // add to reference table
+                reference.push(value);
+                
+                for (index = 0; index < length; index++) {
+                    value[this._readString()] = this.deserialize();
+                }
+            }
+            
+            return value;
         },
         deserialize: function () {
             var stream = this._stream,
@@ -513,23 +667,9 @@ var JSMF = (function (window) {
                 case TYPE_DATE:
                     return new Date(stream.readDouble());
                 case TYPE_ARRAY:
-                    length = stream.readInteger();
-                    temp = [];
-                    
-                    for (index = 0; index < length; index++) {
-                        temp.push(this.deserialize());
-                    }
-                    
-                    return temp;
+                    return this._readArray();
                 case TYPE_OBJECT:
-                    length = stream.readInteger();
-                    temp = {};
-                    
-                    for (index = 0; index < length; index++) {
-                        temp[this._readString()] = this.deserialize();
-                    }
-                    
-                    return temp;
+                    return this._readObject();
                 default:
                     throw new Error('Invalid format');
             }
@@ -728,6 +868,13 @@ var JSMF = (function (window) {
             }
             return true;
         });
+        test('serialize recursive array', function () {
+            var value = [];
+            value[0] = value;
+            var serialized = serialize(value);
+            var deserialized = deserialize(serialized)[0];
+            return deserialized[0] === deserialized;
+        });
         test('serialize object', function () {
             var value = {
                 'undefined': undefined,
@@ -748,6 +895,15 @@ var JSMF = (function (window) {
                 }
             }
             return true;
+        });
+        test('serialize recursive object', function () {
+            var value = {
+                'child': {}
+            };
+            value.child.parent = value;
+            var serialized = serialize(value);
+            var deserialized = deserialize(serialized)[0];
+            return deserialized.child.parent === deserialized;
         });
     }
     
