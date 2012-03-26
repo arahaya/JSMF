@@ -1,7 +1,43 @@
 var JSMF = (function (window) {
     'use strict';
 
-    // only for performance optimizations
+/*
+<document>  ::= *<element>
+
+<element>   ::= "\x01"          <!-- undefined -->
+              | "\x02"          <!-- null -->
+              | "\x03"          <!-- false -->
+              | "\x04"          <!-- true -->
+              | "\x05" <int29>  <!-- integer -->
+              | "\x06" <double> <!-- number -->
+              | "\x07" <string> <!-- string -->
+              | "\x08" <double> <!-- date -->
+              | "\x09" <list>   <!-- array -->
+              | "\x10" <map>    <!-- object -->
+
+<byte>      ::= BYTE      <!-- 8-bit -->
+<int29>     ::= 1*4<byte> <!-- 29-bit signed integer -->
+<double>    ::= *8<byte>  <!-- 64-bit IEEE 754 floating point -->
+
+<string>    ::= <length> *<utf8>
+              | <reference>
+
+<utf8>      ::= 1*4<byte>
+
+<list>      ::= <int29> *<element>
+              | <reference>
+
+<map>       ::= <int29> *<key-value>
+              | <reference>
+
+<key-value> ::= <string> <element>
+
+<length>    ::= <int29>
+
+<reference> ::= <int29>
+*/
+
+    // for performance optimizations
     var is_opera = window && !!window.opera,
         is_chrome = window && !!window.chrome,
         is_firefox = window && window.navigator.userAgent.indexOf('Firefox') !== -1,
@@ -78,7 +114,7 @@ var JSMF = (function (window) {
                 }
                 else if (i < l) {
                     // UTF-16 Surrogates Pair
-                    i++;// skip one char
+                    i += 1;// skip one char
                     n += 4;
                 }
             }
@@ -129,13 +165,11 @@ var JSMF = (function (window) {
                 case '[object Array]':
                 case '[object Arguments]':
                     return TYPE_ARRAY;
-                /*
-                case '[object RegExp]':
-                case '[object Error]':
-                    return TYPE_STRING;
-                */
                 case '[object Function]':
                     return TYPE_UNDEFINED;
+                //case '[object RegExp]':
+                //case '[object Error]':
+                //    return TYPE_STRING;
                 default:
                     return TYPE_OBJECT;
             }
@@ -408,12 +442,6 @@ var JSMF = (function (window) {
                 reference = this._reference,
                 ref, length;
             
-            // check empty
-            if (!value) {
-                stream.writeInteger(0x01);
-                return;
-            }
-            
             // check reference
             ref = reference.indexOf(value);
             if (ref !== -1) {
@@ -424,6 +452,12 @@ var JSMF = (function (window) {
             
             // count length
             length = _countUTFBytes(value);
+            
+            // check empty
+            if (!length) {
+                stream.writeInteger(0x01);
+                return;
+            }
             
             // add to reference table
             reference.push(value);
